@@ -1,0 +1,15 @@
+.git
+.tmp
+.codex
+sql_processor
+sql_processor.exe
+sql_processor_native.exe
+tests/unit/*.exe
+*.log
+*.o
+*.obj
+*.dll
+*.so
+*.a
+*.out
+node_modules

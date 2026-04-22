@@ -1,4 +1,46 @@
 #include "sql_service.h"
+#include <ctype.h>
+
+static const char *skip_sql_prefix(const char *sql_text) {
+    const char *cursor = sql_text;
+
+    for (;;) {
+        while (*cursor != '\0' && isspace((unsigned char) *cursor)) {
+            cursor++;
+        }
+
+        if (cursor[0] == '-' && cursor[1] == '-') {
+            cursor += 2;
+            while (*cursor != '\0' && *cursor != '\n') {
+                cursor++;
+            }
+            continue;
+        }
+
+        if (*cursor == ';') {
+            cursor++;
+            continue;
+        }
+
+        return cursor;
+    }
+}
+
+static int is_sql_identifier_char(unsigned char ch) {
+    return isalnum(ch) || ch == '_';
+}
+
+static int matches_keyword(const char *text, const char *keyword) {
+    size_t index;
+
+    for (index = 0; keyword[index] != '\0'; index++) {
+        if (toupper((unsigned char) text[index]) != keyword[index]) {
+            return 0;
+        }
+    }
+
+    return !is_sql_identifier_char((unsigned char) text[index]);
+}
 
 /*
  * 기능:
@@ -13,12 +55,33 @@
  * - `DbContext`와 서비스 상태를 준비한다.
  *
  * 현재 상태:
- * - SQL 서비스 생성을 위한 stub 함수다.
+ * - DB root와 서비스 상태만 안전하게 준비한다.
+ * - 실제 DB 컨텍스트 연결은 후속 단계에서 붙인다.
  */
 SqlService *sql_service_create(const char *db_root, SqlError *error) {
-    (void) db_root;
-    sql_set_error(error, 0, 0, "sql_service_create stub: SQL 서비스 초기화 로직이 아직 구현되지 않았습니다");
-    return NULL;
+    SqlService *service;
+    size_t root_length;
+
+    if (db_root == NULL || db_root[0] == '\0') {
+        sql_set_error(error, 0, 0, "sql_service_create requires a db_root");
+        return NULL;
+    }
+
+    root_length = strlen(db_root);
+    if (root_length >= sizeof(service->db_root)) {
+        sql_set_error(error, 0, 0, "db_root path is too long");
+        return NULL;
+    }
+
+    service = (SqlService *) malloc(sizeof(*service));
+    if (service == NULL) {
+        sql_set_error(error, 0, 0, "failed to allocate SQL service");
+        return NULL;
+    }
+
+    memset(service, 0, sizeof(*service));
+    memcpy(service->db_root, db_root, root_length + 1U);
+    return service;
 }
 
 /*
@@ -37,21 +100,26 @@ SqlService *sql_service_create(const char *db_root, SqlError *error) {
  * - 협업용 공용 stub 함수다.
  */
 int sql_service_classify_operation(const char *sql_text, SqlOperationKind *operation, SqlError *error) {
+    const char *cursor;
+
     if (sql_text == NULL || operation == NULL) {
         sql_set_error(error, 0, 0, "sql_service_classify_operation received invalid arguments");
         return 0;
     }
 
-    while (*sql_text == ' ' || *sql_text == '\n' || *sql_text == '\t' || *sql_text == '\r') {
-        sql_text++;
+    cursor = skip_sql_prefix(sql_text);
+    if (*cursor == '\0') {
+        *operation = SQL_OPERATION_UNKNOWN;
+        sql_set_error(error, 0, 0, "sql_service_classify_operation received empty SQL");
+        return 0;
     }
 
-    if (strncmp(sql_text, "SELECT", 6) == 0) {
+    if (matches_keyword(cursor, "SELECT")) {
         *operation = SQL_OPERATION_READ;
         return 1;
     }
 
-    if (strncmp(sql_text, "INSERT", 6) == 0) {
+    if (matches_keyword(cursor, "INSERT")) {
         *operation = SQL_OPERATION_WRITE;
         return 1;
     }
@@ -75,14 +143,26 @@ int sql_service_classify_operation(const char *sql_text, SqlOperationKind *opera
  * - 결과를 응답용 문자열로 직렬화한다.
  *
  * 현재 상태:
- * - SQL 실행 진입점을 위한 stub 함수다.
+ * - 분류/검증 경계만 유지하고 실제 DB 실행 연결은 보류한다.
  */
 SqlServiceResult sql_service_execute(SqlService *service, const char *sql_text, SqlError *error) {
     SqlServiceResult result = {0};
+    SqlOperationKind operation = SQL_OPERATION_UNKNOWN;
 
-    (void) service;
-    (void) sql_text;
-    sql_set_error(error, 0, 0, "sql_service_execute stub: SQL 파싱/실행/결과 직렬화 로직이 아직 구현되지 않았습니다");
+    if (service == NULL || sql_text == NULL) {
+        sql_set_error(error, 0, 0, "sql_service_execute received invalid arguments");
+        result.payload = sql_strdup("sql_service_execute received invalid arguments");
+        return result;
+    }
+
+    if (!sql_service_classify_operation(sql_text, &operation, error)) {
+        result.payload = error != NULL ? sql_strdup(error->message) : NULL;
+        return result;
+    }
+
+    (void) operation;
+    sql_set_error(error, 0, 0, "sql_service_execute is not integrated with DB execution yet");
+    result.payload = sql_strdup("DB execution bridge is not ready.");
     return result;
 }
 
@@ -119,8 +199,17 @@ void sql_service_result_destroy(SqlServiceResult *result) {
  * - 마지막에 서비스 구조체를 해제한다.
  *
  * 현재 상태:
- * - 해제 지점을 위한 stub 함수다.
+ * - 서비스 내부 포인터가 연결된 경우까지 안전하게 정리한다.
  */
 void sql_service_destroy(SqlService *service) {
-    (void) service;
+    if (service == NULL) {
+        return;
+    }
+
+    if (service->db_context != NULL) {
+        db_context_destroy(service->db_context);
+        service->db_context = NULL;
+    }
+
+    free(service);
 }
