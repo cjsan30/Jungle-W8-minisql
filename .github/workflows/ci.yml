@@ -11,5 +11,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install git hooks metadata
+        run: bash scripts/install_git_hooks.sh
+
       - name: Build and test
         run: make ci
