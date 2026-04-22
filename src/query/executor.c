@@ -2,6 +2,35 @@
 #include "schema.h"
 #include "storage.h"
 #include <ctype.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
+
+/*
+ * 동시성 보호 계약(4번 개발자 기준):
+ * - executor는 lock을 직접 획득하지 않는다.
+ * - execute_query 전체 호출은 상위 계층에서 db_guard로 감싼다.
+ *   - QUERY_SELECT: db_guard_execute_read
+ *   - QUERY_INSERT: db_guard_execute_write
+ * - 즉, execute_select/execute_insert 내부는 "이미 올바른 lock을 획득했다"는
+ *   전제 하에 동작한다.
+ */
+
+#ifdef _WIN32
+static void ensure_stdout_binary_mode(FILE *out) {
+    static int configured = 0;
+
+    if (!configured && out == stdout) {
+        (void) _setmode(_fileno(stdout), _O_BINARY);
+        configured = 1;
+    }
+}
+#else
+static void ensure_stdout_binary_mode(FILE *out) {
+    (void) out;
+}
+#endif
 
 static int is_integer_string(const char *text) {
     size_t index = 0;
@@ -288,6 +317,8 @@ int execute_query(const Query *query, DbContext *ctx, FILE *out, SqlError *error
         sql_set_error(error, 0, 0, "execute_query received invalid arguments");
         return 0;
     }
+
+    ensure_stdout_binary_mode(out);
 
     if (query->type == QUERY_SELECT) {
         return execute_select(query, ctx, out, error);

@@ -33,6 +33,76 @@ char *sql_strdup(const char *src) {
     return copy;
 }
 
+char *sql_json_quote(const char *src, SqlError *error) {
+    const char *text = src != NULL ? src : "";
+    size_t input_length = strlen(text);
+    size_t output_capacity;
+    char *quoted;
+    size_t input_index;
+    size_t output_index = 0;
+
+    if (input_length > (((size_t) -1) - 3U) / 6U) {
+        sql_set_error(error, 0, 0, "JSON string is too large to quote");
+        return NULL;
+    }
+
+    output_capacity = (input_length * 6U) + 3U;
+    quoted = (char *) malloc(output_capacity);
+    if (quoted == NULL) {
+        sql_set_error(error, 0, 0, "failed to allocate JSON string");
+        return NULL;
+    }
+
+    quoted[output_index++] = '"';
+    for (input_index = 0; input_index < input_length; input_index++) {
+        unsigned char ch = (unsigned char) text[input_index];
+
+        switch (ch) {
+            case '"':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = '"';
+                break;
+            case '\\':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = '\\';
+                break;
+            case '\b':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = 'b';
+                break;
+            case '\f':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = 'f';
+                break;
+            case '\n':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = 'n';
+                break;
+            case '\r':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = 'r';
+                break;
+            case '\t':
+                quoted[output_index++] = '\\';
+                quoted[output_index++] = 't';
+                break;
+            default:
+                if (ch < 0x20U) {
+                    (void) snprintf(quoted + output_index, 7U, "\\u%04x", ch);
+                    output_index += 6U;
+                    break;
+                }
+
+                quoted[output_index++] = (char) ch;
+                break;
+        }
+    }
+
+    quoted[output_index++] = '"';
+    quoted[output_index] = '\0';
+    return quoted;
+}
+
 char *sql_read_text_file(const char *path, SqlError *error) {
     FILE *file;
     long length;

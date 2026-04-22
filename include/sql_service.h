@@ -33,7 +33,7 @@ SqlService *sql_service_create(const char *db_root, SqlError *error);
 /*
  * 기능:
  * - SQL 문자열이 읽기/쓰기 중 어느 동작인지 분류한다.
- * - 3번과 4번이 공유하는 락 분기용 공용 stub다.
+ * - request handler가 락 종류를 결정할 때 사용하는 분기 함수다.
  *
  * 반환값:
  * - 성공: 1

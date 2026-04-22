@@ -18,6 +18,7 @@ typedef struct {
 
 void sql_set_error(SqlError *error, int line, int column, const char *fmt, ...);
 char *sql_strdup(const char *src);
+char *sql_json_quote(const char *src, SqlError *error);
 char *sql_read_text_file(const char *path, SqlError *error);
 
 #endif

@@ -30,7 +30,10 @@ if ($BenchCount -gt 0) {
 }
 $argumentList += @("--db", $DbRoot)
 
+$previousErrorActionPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
 $output = & $Executable @argumentList 2>&1
+$ErrorActionPreference = $previousErrorActionPreference
 $outputText = ($output | Out-String)
 $normalizedOutput = Normalize-Text -Value $outputText
 

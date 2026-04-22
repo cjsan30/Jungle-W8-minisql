@@ -1,4 +1,47 @@
 #include "server.h"
+#include "socket_server_internal.h"
+
+#include <stdlib.h>
+
+static int server_config_validate(const ServerConfig *config, SqlError *error) {
+    if (config == NULL) {
+        sql_set_error(error, 0, 0, "server config must not be null");
+        return 0;
+    }
+    if (memchr(config->host, '\0', sizeof(config->host)) == NULL) {
+        sql_set_error(error, 0, 0, "server host must be null terminated");
+        return 0;
+    }
+    if (memchr(config->db_root, '\0', sizeof(config->db_root)) == NULL) {
+        sql_set_error(error, 0, 0, "server db_root must be null terminated");
+        return 0;
+    }
+    if (config->db_root[0] == '\0') {
+        sql_set_error(error, 0, 0, "server db_root must not be empty");
+        return 0;
+    }
+    if (config->port <= 0 || config->port > 65535) {
+        sql_set_error(error, 0, 0, "server port must be between 1 and 65535");
+        return 0;
+    }
+    if (config->backlog <= 0) {
+        sql_set_error(error, 0, 0, "server backlog must be positive");
+        return 0;
+    }
+    if (config->worker_count <= 0) {
+        sql_set_error(error, 0, 0, "server worker_count must be positive");
+        return 0;
+    }
+    if (config->queue_capacity <= 0) {
+        sql_set_error(error, 0, 0, "server queue_capacity must be positive");
+        return 0;
+    }
+    if (config->client_read_timeout_ms < 0) {
+        sql_set_error(error, 0, 0, "server client_read_timeout_ms must not be negative");
+        return 0;
+    }
+    return 1;
+}
 
 /*
  * 기능:
@@ -10,16 +53,57 @@
  *
  * 흐름:
  * - 설정값을 검증한다.
- * - 서버 구조체와 내부 의존성을 준비한다.
+ * - 서버 구조체, thread pool, SQL 실행 의존성을 준비한다.
  * - 이후 `server_start`에서 실제 실행을 시작한다.
  *
- * 현재 상태:
- * - 서버 생성 흐름을 위한 stub 함수다.
  */
 DbServer *server_create(const ServerConfig *config, SqlError *error) {
-    (void) config;
-    sql_set_error(error, 0, 0, "server_create stub: API 서버 초기화 로직이 아직 구현되지 않았습니다");
-    return NULL;
+    DbServer *server;
+
+    if (!server_config_validate(config, error)) {
+        return NULL;
+    }
+
+    server = (DbServer *) calloc(1U, sizeof(*server));
+    if (server == NULL) {
+        sql_set_error(error, 0, 0, "failed to allocate server runtime");
+        return NULL;
+    }
+
+    server->listen_fd = -1;
+    server->is_running = 0;
+    server->config = *config;
+    server->thread_pool = thread_pool_create(config->worker_count, config->queue_capacity, error);
+    if (server->thread_pool == NULL) {
+        free(server);
+        return NULL;
+    }
+
+    server->sql_service = sql_service_create(config->db_root, error);
+    if (server->sql_service == NULL) {
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
+    server->db_guard = db_guard_create(server->sql_service->db_context, error);
+    if (server->db_guard == NULL) {
+        sql_service_destroy(server->sql_service);
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
+    server->request_handler = request_handler_create(server->sql_service, server->db_guard, error);
+    if (server->request_handler == NULL) {
+        db_guard_destroy(server->db_guard);
+        sql_service_destroy(server->sql_service);
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
+    return server;
 }
 
 /*
@@ -32,16 +116,47 @@ DbServer *server_create(const ServerConfig *config, SqlError *error) {
  *
  * 흐름:
  * - listen 소켓을 준비한다.
- * - thread pool을 시작한다.
- * - 클라이언트 요청을 받아 작업 큐에 전달한다.
+ * - accept 루프에서 요청을 받고 worker queue에 전달한다.
+ * - worker가 request handler를 통해 SQL 요청을 처리한다.
  *
- * 현재 상태:
- * - 실행 흐름을 위한 stub 함수다.
  */
 int server_start(DbServer *server, SqlError *error) {
-    (void) server;
-    sql_set_error(error, 0, 0, "server_start stub: listen 소켓/accept 루프가 아직 구현되지 않았습니다");
-    return 0;
+    int listen_fd;
+
+    if (server == NULL) {
+        sql_set_error(error, 0, 0, "server must not be null");
+        return 0;
+    }
+    if (server->is_running) {
+        sql_set_error(error, 0, 0, "server is already running");
+        return 0;
+    }
+    if (server->thread_pool == NULL) {
+        sql_set_error(error, 0, 0, "server thread pool is not initialized");
+        return 0;
+    }
+
+    listen_fd = server_socket_open(&server->config, error);
+    if (listen_fd < 0) {
+        return 0;
+    }
+
+    server->listen_fd = listen_fd;
+    server->is_running = 1;
+
+    if (!thread_pool_start(server->thread_pool, error)) {
+        server->is_running = 0;
+        server_socket_close(&server->listen_fd);
+        return 0;
+    }
+
+    if (!server_socket_accept_loop(server, error)) {
+        server_stop(server);
+        return 0;
+    }
+
+    server_stop(server);
+    return 1;
 }
 
 /*
@@ -55,11 +170,15 @@ int server_start(DbServer *server, SqlError *error) {
  * - 수신 루프를 멈춘다.
  * - listen fd와 worker 종료를 유도한다.
  *
- * 현재 상태:
- * - 종료 지점을 위한 stub 함수다.
  */
 void server_stop(DbServer *server) {
-    (void) server;
+    if (server == NULL) {
+        return;
+    }
+
+    server->is_running = 0;
+    server_socket_close(&server->listen_fd);
+    thread_pool_stop(server->thread_pool);
 }
 
 /*
@@ -73,9 +192,16 @@ void server_stop(DbServer *server) {
  * - 내부 자원이 남아 있으면 먼저 정리한다.
  * - 마지막에 서버 구조체 자체를 해제한다.
  *
- * 현재 상태:
- * - 정리 지점을 위한 stub 함수다.
  */
 void server_destroy(DbServer *server) {
-    (void) server;
+    if (server == NULL) {
+        return;
+    }
+
+    server_stop(server);
+    request_handler_destroy(server->request_handler);
+    db_guard_destroy(server->db_guard);
+    sql_service_destroy(server->sql_service);
+    thread_pool_destroy(server->thread_pool);
+    free(server);
 }

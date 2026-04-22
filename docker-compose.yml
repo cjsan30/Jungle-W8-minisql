@@ -1,0 +1,15 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    working_dir: /workspace
+    command: sleep infinity
+    tty: true
+    stdin_open: true
+    init: true
+    user: jungle
+    ports:
+      - "8080:8080"
+    volumes:
+      - .:/workspace

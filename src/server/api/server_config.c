@@ -18,7 +18,8 @@ void server_config_set_defaults(ServerConfig *config) {
     }
 
     memset(config, 0, sizeof(*config));
-    strncpy(config->host, "127.0.0.1", sizeof(config->host) - 1);
+    strncpy(config->host, "0.0.0.0", sizeof(config->host) - 1);
+    strncpy(config->db_root, "./data", sizeof(config->db_root) - 1);
     config->port = 8080;
     config->backlog = 128;
     config->worker_count = 4;
