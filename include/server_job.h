@@ -11,6 +11,18 @@ typedef struct {
 } ServerJobData;
 
 /*
+ * Job.data 계약:
+ * - 1번 개발자는 ServerJobData 포인터를 Job.data로 넘긴다.
+ * - thread_pool_submit 성공 후 payload 해제와 client_fd close 책임은 worker cleanup에 있다.
+ * - thread_pool_submit 실패 시 2번 구현이 cleanup을 호출한다.
+ *
+ * 사용 예시:
+ * - server_job_data_init(data, client_fd, raw_request, raw_request_length)
+ * - job = server_job_build(execute_fn, server_job_cleanup, data)
+ * - thread_pool_submit(pool, job, error)
+ */
+
+/*
  * 기능:
  * - API 서버가 worker queue에 넘길 공용 작업 payload를 초기화한다.
  * - 1번과 2번이 공유하는 최소 전달 계약이다.
@@ -63,9 +75,20 @@ Job server_job_build(JobExecuteFn execute, JobCleanupFn cleanup, void *job_data)
  * - 없음
  *
  * 흐름:
+ * - client fd를 닫는다.
  * - raw request 버퍼를 해제한다.
  * - payload 상태를 초기화한다.
  */
 void server_job_data_destroy(ServerJobData *job_data);
+
+/*
+ * 기능:
+ * - JobCleanupFn으로 바로 넘길 수 있는 ServerJobData cleanup 콜백이다.
+ *
+ * 흐름:
+ * - server_job_data_destroy로 fd와 내부 버퍼를 정리한다.
+ * - heap에 할당된 ServerJobData 구조체 자체를 해제한다.
+ */
+void server_job_cleanup(void *job_data);
 
 #endif
