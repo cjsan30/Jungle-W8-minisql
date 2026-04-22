@@ -1,0 +1,10 @@
+benchmark rows=2 iterations=10
+load_build_ms=0.000
+index_hits=10
+linear_hits=10
+distinct_probes=2
+avg_linear_steps=1.500
+max_linear_steps=2
+index_ms=0.000
+linear_ms=0.000
+speedup_ratio=0.000

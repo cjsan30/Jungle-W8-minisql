@@ -53,3 +53,27 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# Project build outputs
+sql_processor
+tests/unit/test_cli_parser
+tests/unit/test_bptree
+tests/unit/test_server_config
+
+# Temporary runtime and benchmark data
+.tmp/
+*.log
+
+# Local tool metadata
+.codex
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS-generated files
+.DS_Store
+Thumbs.db
+desktop.ini

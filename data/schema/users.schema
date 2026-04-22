@@ -1,0 +1,4 @@
+table=users
+columns=id:int,name:string,age:int
+pkey=id
+autoincrement=true
