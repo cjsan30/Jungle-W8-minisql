@@ -9,12 +9,12 @@
 ## 목차
 
 1. [프로젝트 개요](#1-프로젝트-개요)
-2. [실행 방법](#2-실행-방법)
-3. [테스트](#3-테스트)
-4. [전체 파이프라인](#4-전체-파이프라인)
+2. [전체 파이프라인](#2-전체-파이프라인)
+3. [동시성 이슈](#3-동시성-이슈)
+4. [스레드 풀](#4-스레드-풀)
 5. [엣지 케이스 검증](#5-엣지-케이스-검증)
-6. [동시성 해결 방법](#6-동시성-해결-방법)
-7. [스레드 풀 구현](#7-스레드-풀-구현)
+6. [테스트](#6-테스트)
+7. [실행 방법](#7-실행-방법)
 8. [발표 시연 순서](#8-발표-시연-순서)
 
 ---
@@ -46,54 +46,7 @@
 
 ---
 
-## 2. 실행 방법
-
-### CLI 실행
-
-```sh
-./sql_processor --query "SELECT * FROM users WHERE id = 2;" --db ./data
-./sql_processor --sql tests/integration/smoke.sql --db ./data
-./sql_processor --bench 1000000 --db ./data
-```
-
-### API 서버 실행
-
-```sh
-./sql_api_server --host 0.0.0.0 --port 8080 --db ./data
-```
-
-요청 형식은 `POST` + request body 입니다.
-
-```sh
-curl -X POST http://127.0.0.1:8080/query \
-  -H "Content-Type: text/plain" \
-  --data "SELECT * FROM users WHERE id = 2;"
-```
-
-예상 응답 본문:
-
-```json
-{"ok":true,"type":"select","table":"users","rows":[{"id":2,"name":"Bob","age":22}]}
-```
-
----
-
-## 3. 테스트
-
-```sh
-make unit
-make integration
-make api-smoke
-make test
-```
-
-- `unit`: parser, B+Tree, server config, HTTP protocol, SQL service, request handler 검증
-- `integration`: 기존 CLI 기반 SQL roundtrip 검증
-- `api-smoke`: API 서버를 띄운 뒤 `POST /query` smoke와 동시 SELECT/INSERT 병렬 처리 검증
-
----
-
-## 4. 전체 파이프라인
+## 2. 전체 파이프라인
 
 ![전체 파이프라인](image/request_flow_horizontal.svg)
 
@@ -110,6 +63,232 @@ make test
 | SQL 서비스 | `src/server/request/sql_service.c` | SQL 파싱·실행·JSON 생성 |
 | HTTP 프로토콜 | `src/server/request/http_protocol.c` | HTTP 요청/응답 직렬화 |
 | DB 동시성 | `src/server/concurrency/db_guard.c` | 원자적 Reader-Writer 동기화 |
+
+---
+
+## 3. 동시성 이슈
+
+### 3-1. 전체 동시성 구조
+
+```text
+                  ┌──────────────────────────────────┐
+클라이언트 요청들  │       스레드 풀 (고정 N개 워커)     │
+     ──→          │  워커1  워커2  워커3  ...  워커N    │
+     ──→          │    │      │      │           │     │
+     ──→          └────┼──────┼──────┼───────────┼─────┘
+                       └──────┴──────┴───────────┘
+                                   │
+                    SQL 분류 (SELECT / INSERT)
+                           │            │
+                    READ 경로     WRITE 경로
+                           │            │
+                    ┌──────▼────────────▼──────┐
+                    │       DB Guard           │
+                    │  (원자적 Reader-Writer)   │
+                    │  ┌────────────────────┐  │
+                    │  │ 다수 독자 동시 허용 │  │
+                    │  │ 작성자는 단독 점유 │  │
+                    │  └────────────────────┘  │
+                    └──────────────────────────┘
+                                   │
+                             B+Tree DB 파일
+```
+
+### 3-2. DB Guard — 원자적 Reader-Writer 락
+
+**파일**: `src/server/concurrency/db_guard.c`
+
+```c
+struct DbGuard {
+    atomic_int reader_count;
+    atomic_int writer_active;
+    atomic_int writers_waiting;
+};
+```
+
+읽기 락 획득 흐름:
+
+```text
+1. writer 활성/대기 여부 확인
+2. 가능하면 reader_count 증가
+3. 읽기 수행
+4. reader_count 감소
+```
+
+쓰기 락 획득 흐름:
+
+```text
+1. writers_waiting 증가
+2. writer_active 획득 시도
+3. reader_count가 0이면 쓰기 진입
+4. 쓰기 수행
+5. writer_active 해제
+```
+
+### 3-3. 잡 큐 — mutex + 조건 변수
+
+**파일**: `src/server/pool/job_queue.c`
+
+```c
+struct JobQueue {
+    Job *jobs;
+    int capacity;
+    int count;
+    int head;
+    int tail;
+    int closed;
+    pthread_mutex_t mutex;
+    pthread_cond_t not_empty;
+    pthread_cond_t not_full;
+};
+```
+
+Push 흐름:
+
+```text
+1. Queue Lock(mutex) 획득
+2. Queue가 가득 찬 상태 && 열려 있는 상태 -> not_full에서 sleep
+3. Queue에 pop 발생으로 not_full signal 발생
+4. mutex 재 획득하여 조건 확인 이후 접근(Queue 가 닫혀있으면 실패 반환)
+5. Queue의 Tail에 Job 저장
+6. Count 증가
+7. not_empty signal로 대기 중인 worker wake
+8. Queue Lock(mutex) 해제 후 성공 반환
+```
+
+Pop 흐름:
+
+```text
+1. Queue Lock(mutex) 획득
+2. Queue가 비어 있는 상태 && 열려 있는 상태 -> not_empty에서 sleep
+3. Queue에 push가 발생하면 not_empty signal 수신
+4. mutex 재획득 후 조건 재확인 (Queue가 비어 있고 닫혀 있으면 0 반환)
+5. Queue의 Head 위치에서 Job 추출
+6. Head를 다음 칸으로 이동하고 Count 감소
+7. not_full signal로 대기 중인 submitter wake
+8. Queue Lock(mutex) 해제 후 Job 반환
+```
+
+허위 각성은 `if`가 아니라 `while`로 조건을 재검사해서 처리합니다.
+
+```c
+while (queue->count == 0 && !queue->closed) {
+    pthread_cond_wait(&queue->not_empty, &queue->mutex);
+}
+```
+
+---
+
+## 4. 스레드 풀
+
+### 4-1. 전체 구조
+
+**파일**: `src/server/pool/thread_pool.c`
+
+```c
+struct ThreadPool {
+    int worker_count;
+    int started;
+    JobQueue *queue;
+    pthread_t *workers;
+};
+```
+
+### 4-2. 생명주기
+
+```text
+thread_pool_create(worker_count, queue_capacity)
+         │
+         ├─ ThreadPool 구조체 할당
+         ├─ pthread_t 배열 할당
+         ├─ JobQueue 생성 (mutex + cond 초기화)
+         └─ 반환 (아직 스레드 없음)
+                  │
+thread_pool_start(pool)
+         │
+         ├─ pool->started = 1
+         └─ worker_count개의 pthread 생성
+            각 스레드: thread_pool_worker_main(pool)
+                  │
+         [서버 동작 중]
+                  │
+thread_pool_stop(pool)
+         │
+         ├─ job_queue_close() → 큐 닫기
+         │    └→ 대기 중 모든 워커에 broadcast
+         └─ pthread_join() × worker_count → 모든 완료 대기
+                  │
+thread_pool_destroy(pool)
+         │
+         ├─ thread_pool_stop() 호출
+         ├─ job_queue_destroy() → 잔여 잡 정리
+         └─ workers 배열 해제
+```
+
+### 4-3. 워커 스레드 루프
+
+```c
+static void *thread_pool_worker_main(void *arg) {
+    ThreadPool *pool = arg;
+    Job job = {0};
+
+    while (job_queue_pop(pool->queue, &job)) {
+        run_job(&job);
+        memset(&job, 0, sizeof(job));
+    }
+
+    return NULL;
+}
+```
+
+```c
+static void run_job(Job *job) {
+    job->execute(job->data);
+    if (job->cleanup != NULL) {
+        job->cleanup(job->data);
+    }
+}
+```
+
+### 4-4. 잡 소유권 계약
+
+```text
+제출 성공 시:
+  Main Thread ──(소유권 이전)──→ Worker Thread
+  → worker가 execute() + cleanup() 호출
+
+제출 실패 시:
+  thread_pool_submit() 내부에서 cleanup() 직접 호출
+  → 이중 해제 방지
+```
+
+`ServerJobData` cleanup은 `src/server/pool/server_job_stub.c`의 `server_job_cleanup()`이 담당합니다.
+
+```c
+void server_job_cleanup(void *job_data) {
+    ServerJobData *server_job_data = job_data;
+
+    server_job_data_destroy(server_job_data);
+    free(server_job_data);
+}
+```
+
+### 4-5. 예외 처리: 부분 스레드 생성 실패
+
+```c
+for (index = 0; index < pool->worker_count; index++) {
+    if (pthread_create(&pool->workers[index], NULL, thread_pool_worker_main, pool) != 0) {
+        sql_set_error(error, 0, 0, "failed to start worker thread");
+        pool->worker_count = index;
+        thread_pool_stop(pool);
+        return 0;
+    }
+}
+```
+
+### 4-6. 스레드 처리 흐름
+
+![스레드 처리 흐름](image/thread_flow_diagram.svg)
 
 ---
 
@@ -176,226 +355,50 @@ SQL 처리 검증 단계
 
 ---
 
-## 6. 동시성 해결 방법
+## 6. 테스트
 
-### 6-1. 전체 동시성 구조
-
-```text
-                  ┌──────────────────────────────────┐
-클라이언트 요청들  │       스레드 풀 (고정 N개 워커)     │
-     ──→          │  워커1  워커2  워커3  ...  워커N    │
-     ──→          │    │      │      │           │     │
-     ──→          └────┼──────┼──────┼───────────┼─────┘
-                       └──────┴──────┴───────────┘
-                                   │
-                    SQL 분류 (SELECT / INSERT)
-                           │            │
-                    READ 경로     WRITE 경로
-                           │            │
-                    ┌──────▼────────────▼──────┐
-                    │       DB Guard           │
-                    │  (원자적 Reader-Writer)   │
-                    │  ┌────────────────────┐  │
-                    │  │ 다수 독자 동시 허용 │  │
-                    │  │ 작성자는 단독 점유 │  │
-                    │  └────────────────────┘  │
-                    └──────────────────────────┘
-                                   │
-                             B+Tree DB 파일
+```sh
+make unit
+make integration
+make api-smoke
+make test
 ```
 
-### 6-2. DB Guard — 원자적 Reader-Writer 락
-
-**파일**: `src/server/concurrency/db_guard.c`
-
-```c
-struct DbGuard {
-    atomic_int reader_count;
-    atomic_int writer_active;
-    atomic_int writers_waiting;
-};
-```
-
-읽기 락 획득 흐름:
-
-```text
-1. writer_active 또는 writers_waiting 확인
-2. 작성자 또는 대기 작성자가 있으면 스핀 대기
-3. reader_count 원자적 증가
-4. 다시 writer 상태 확인
-5. 작성자가 없으면 읽기 진입, 있으면 reader_count 감소 후 재시도
-```
-
-쓰기 락 획득 흐름:
-
-```text
-1. writers_waiting 원자적 증가
-2. writer_active를 CAS로 0 → 1 전환 시도
-3. 성공 후 reader_count == 0 확인
-4. 독자가 없으면 쓰기 진입
-5. 독자가 있으면 writer_active를 복원하고 재시도
-```
-
-### 6-3. 잡 큐 — mutex + 조건 변수
-
-**파일**: `src/server/pool/job_queue.c`
-
-```c
-struct JobQueue {
-    Job *jobs;
-    int capacity;
-    int count;
-    int head;
-    int tail;
-    int closed;
-    pthread_mutex_t mutex;
-    pthread_cond_t not_empty;
-    pthread_cond_t not_full;
-};
-```
-
-Push 흐름:
-
-```text
-락 획득
-  └→ 큐가 가득 찼고 열려 있으면 not_full 대기
-  └→ 큐가 닫혔으면 실패 반환
-  └→ 잡 삽입, count 증가
-  └→ not_empty signal로 worker 깨움
-락 해제
-```
-
-Pop 흐름:
-
-```text
-락 획득
-  └→ 큐가 비었고 열려 있으면 not_empty 대기
-  └→ 큐가 비었고 닫혔으면 0 반환
-  └→ 잡 추출, count 감소
-  └→ not_full signal로 제출자 깨움
-락 해제
-```
-
-허위 각성은 `if`가 아니라 `while`로 조건을 재검사해서 처리합니다.
-
-```c
-while (queue->count == 0 && !queue->closed) {
-    pthread_cond_wait(&queue->not_empty, &queue->mutex);
-}
-```
+- `unit`: parser, B+Tree, server config, HTTP protocol, SQL service, request handler 검증
+- `integration`: 기존 CLI 기반 SQL roundtrip 검증
+- `api-smoke`: API 서버를 띄운 뒤 `POST /query` smoke와 동시 SELECT/INSERT 병렬 처리 검증
 
 ---
 
-## 7. 스레드 풀 구현
+## 7. 실행 방법
 
-### 7-1. 전체 구조
+### CLI 실행
 
-**파일**: `src/server/pool/thread_pool.c`
-
-```c
-struct ThreadPool {
-    int worker_count;
-    int started;
-    JobQueue *queue;
-    pthread_t *workers;
-};
+```sh
+./sql_processor --query "SELECT * FROM users WHERE id = 2;" --db ./data
+./sql_processor --sql tests/integration/smoke.sql --db ./data
+./sql_processor --bench 1000000 --db ./data
 ```
 
-### 7-2. 생명주기
+### API 서버 실행
 
-```text
-thread_pool_create(worker_count, queue_capacity)
-         │
-         ├─ ThreadPool 구조체 할당
-         ├─ pthread_t 배열 할당
-         ├─ JobQueue 생성 (mutex + cond 초기화)
-         └─ 반환 (아직 스레드 없음)
-                  │
-thread_pool_start(pool)
-         │
-         ├─ pool->started = 1
-         └─ worker_count개의 pthread 생성
-            각 스레드: thread_pool_worker_main(pool)
-                  │
-         [서버 동작 중]
-                  │
-thread_pool_stop(pool)
-         │
-         ├─ job_queue_close() → 큐 닫기
-         │    └→ 대기 중 모든 워커에 broadcast
-         └─ pthread_join() × worker_count → 모든 완료 대기
-                  │
-thread_pool_destroy(pool)
-         │
-         ├─ thread_pool_stop() 호출
-         ├─ job_queue_destroy() → 잔여 잡 정리
-         └─ workers 배열 해제
+```sh
+./sql_api_server --host 0.0.0.0 --port 8080 --db ./data
 ```
 
-### 7-3. 워커 스레드 루프
+요청 형식은 `POST` + request body 입니다.
 
-```c
-static void *thread_pool_worker_main(void *arg) {
-    ThreadPool *pool = arg;
-    Job job = {0};
-
-    while (job_queue_pop(pool->queue, &job)) {
-        run_job(&job);
-        memset(&job, 0, sizeof(job));
-    }
-
-    return NULL;
-}
+```sh
+curl -X POST http://127.0.0.1:8080/query \
+  -H "Content-Type: text/plain" \
+  --data "SELECT * FROM users WHERE id = 2;"
 ```
 
-```c
-static void run_job(Job *job) {
-    job->execute(job->data);
-    if (job->cleanup != NULL) {
-        job->cleanup(job->data);
-    }
-}
+예상 응답 본문:
+
+```json
+{"ok":true,"type":"select","table":"users","rows":[{"id":2,"name":"Bob","age":22}]}
 ```
-
-### 7-4. 잡 소유권 계약
-
-```text
-제출 성공 시:
-  Main Thread ──(소유권 이전)──→ Worker Thread
-  → worker가 execute() + cleanup() 호출
-
-제출 실패 시:
-  thread_pool_submit() 내부에서 cleanup() 직접 호출
-  → 이중 해제 방지
-```
-
-`ServerJobData` cleanup은 `src/server/pool/server_job_stub.c`의 `server_job_cleanup()`이 담당합니다.
-
-```c
-void server_job_cleanup(void *job_data) {
-    ServerJobData *server_job_data = job_data;
-
-    server_job_data_destroy(server_job_data);
-    free(server_job_data);
-}
-```
-
-### 7-5. 예외 처리: 부분 스레드 생성 실패
-
-```c
-for (index = 0; index < pool->worker_count; index++) {
-    if (pthread_create(&pool->workers[index], NULL, thread_pool_worker_main, pool) != 0) {
-        sql_set_error(error, 0, 0, "failed to start worker thread");
-        pool->worker_count = index;
-        thread_pool_stop(pool);
-        return 0;
-    }
-}
-```
-
-### 7-6. 스레드 처리 흐름
-
-![스레드 처리 흐름](image/thread_flow_diagram.svg)
 
 ---
 
