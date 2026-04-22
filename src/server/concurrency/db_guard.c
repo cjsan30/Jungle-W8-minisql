@@ -1,7 +1,11 @@
 #include "db_guard.h"
+#include <stdatomic.h>
 
 struct DbGuard {
     DbContext *ctx;
+    atomic_int reader_count;
+    atomic_int writer_active;
+    atomic_int writers_waiting;
 };
 
 /*
@@ -20,9 +24,24 @@ struct DbGuard {
  * - 동시성 보호 계층 생성을 위한 stub 함수다.
  */
 DbGuard *db_guard_create(DbContext *ctx, SqlError *error) {
-    (void) ctx;
-    sql_set_error(error, 0, 0, "db_guard_create stub: DB 동시성 보호 계층이 아직 구현되지 않았습니다");
-    return NULL;
+    DbGuard *guard;
+
+    if (ctx == NULL) {
+        sql_set_error(error, 0, 0, "db_guard_create received NULL db context");
+        return NULL;
+    }
+
+    guard = (DbGuard *) calloc(1, sizeof(DbGuard));
+    if (guard == NULL) {
+        sql_set_error(error, 0, 0, "db_guard_create failed to allocate guard");
+        return NULL;
+    }
+
+    guard->ctx = ctx;
+    atomic_init(&guard->reader_count, 0);
+    atomic_init(&guard->writer_active, 0);
+    atomic_init(&guard->writers_waiting, 0);
+    return guard;
 }
 
 /*
@@ -41,9 +60,25 @@ DbGuard *db_guard_create(DbContext *ctx, SqlError *error) {
  * - read lock 획득을 위한 stub 함수다.
  */
 int db_guard_lock_read(DbGuard *guard, SqlError *error) {
-    (void) guard;
-    sql_set_error(error, 0, 0, "db_guard_lock_read stub: read lock 로직이 아직 구현되지 않았습니다");
-    return 0;
+    if (guard == NULL) {
+        sql_set_error(error, 0, 0, "db_guard_lock_read received NULL guard");
+        return 0;
+    }
+
+    for (;;) {
+        if (atomic_load_explicit(&guard->writer_active, memory_order_acquire) != 0 ||
+            atomic_load_explicit(&guard->writers_waiting, memory_order_acquire) != 0) {
+            continue;
+        }
+
+        (void) atomic_fetch_add_explicit(&guard->reader_count, 1, memory_order_acquire);
+        if (atomic_load_explicit(&guard->writer_active, memory_order_acquire) == 0 &&
+            atomic_load_explicit(&guard->writers_waiting, memory_order_acquire) == 0) {
+            return 1;
+        }
+
+        (void) atomic_fetch_sub_explicit(&guard->reader_count, 1, memory_order_release);
+    }
 }
 
 /*
@@ -62,9 +97,32 @@ int db_guard_lock_read(DbGuard *guard, SqlError *error) {
  * - write lock 획득을 위한 stub 함수다.
  */
 int db_guard_lock_write(DbGuard *guard, SqlError *error) {
-    (void) guard;
-    sql_set_error(error, 0, 0, "db_guard_lock_write stub: write lock 로직이 아직 구현되지 않았습니다");
-    return 0;
+    if (guard == NULL) {
+        sql_set_error(error, 0, 0, "db_guard_lock_write received NULL guard");
+        return 0;
+    }
+
+    (void) atomic_fetch_add_explicit(&guard->writers_waiting, 1, memory_order_acq_rel);
+
+    for (;;) {
+        int expected = 0;
+
+        if (!atomic_compare_exchange_weak_explicit(
+                &guard->writer_active,
+                &expected,
+                1,
+                memory_order_acq_rel,
+                memory_order_acquire)) {
+            continue;
+        }
+
+        if (atomic_load_explicit(&guard->reader_count, memory_order_acquire) == 0) {
+            (void) atomic_fetch_sub_explicit(&guard->writers_waiting, 1, memory_order_acq_rel);
+            return 1;
+        }
+
+        atomic_store_explicit(&guard->writer_active, 0, memory_order_release);
+    }
 }
 
 /*
@@ -82,7 +140,11 @@ int db_guard_lock_write(DbGuard *guard, SqlError *error) {
  * - 해제 지점을 위한 stub 함수다.
  */
 void db_guard_unlock_read(DbGuard *guard) {
-    (void) guard;
+    if (guard == NULL) {
+        return;
+    }
+
+    (void) atomic_fetch_sub_explicit(&guard->reader_count, 1, memory_order_release);
 }
 
 /*
@@ -100,7 +162,11 @@ void db_guard_unlock_read(DbGuard *guard) {
  * - 해제 지점을 위한 stub 함수다.
  */
 void db_guard_unlock_write(DbGuard *guard) {
-    (void) guard;
+    if (guard == NULL) {
+        return;
+    }
+
+    atomic_store_explicit(&guard->writer_active, 0, memory_order_release);
 }
 
 /*
@@ -118,7 +184,11 @@ void db_guard_unlock_write(DbGuard *guard) {
  * - 해제 지점을 위한 stub 함수다.
  */
 void db_guard_destroy(DbGuard *guard) {
-    (void) guard;
+    if (guard == NULL) {
+        return;
+    }
+
+    free(guard);
 }
 
 /*

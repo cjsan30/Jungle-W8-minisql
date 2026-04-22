@@ -97,4 +97,16 @@ int db_guard_execute_read(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx,
  */
 int db_guard_execute_write(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx, SqlError *error);
 
+/*
+ * 3번-4번 공용 호출 순서 예시:
+ * 1) sql_service_classify_operation(sql, &kind, error)
+ * 2) kind == SQL_OPERATION_READ  -> db_guard_execute_read(...)
+ * 3) kind == SQL_OPERATION_WRITE -> db_guard_execute_write(...)
+ *
+ * 정책:
+ * - SELECT는 read lock으로 병렬 실행한다.
+ * - INSERT는 write lock으로 단독 실행한다.
+ * - lock/unlock 책임은 db_guard_execute_* 내부에 있다.
+ */
+
 #endif
