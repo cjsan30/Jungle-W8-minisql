@@ -2,10 +2,11 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+fixture_db_root="${SQL_TEST_DB_ROOT:-$root_dir/tests/fixtures/data}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-cp -r "$root_dir/data" "$tmp_dir/data"
+cp -r "$fixture_db_root" "$tmp_dir/data"
 printf '"x","Carol","25"\n' >> "$tmp_dir/data/tables/users.csv"
 
 set +e

@@ -2,10 +2,11 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
+fixture_db_root="${SQL_TEST_DB_ROOT:-$root_dir/tests/fixtures/data}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-cp -r "$root_dir/data" "$tmp_dir/data"
+cp -r "$fixture_db_root" "$tmp_dir/data"
 printf "INSERT INTO users VALUES ('A,B', 25);\n" > "$tmp_dir/insert.sql"
 
 insert_output="$("$root_dir/sql_processor" --sql "$tmp_dir/insert.sql" --db "$tmp_dir/data" 2>&1)"

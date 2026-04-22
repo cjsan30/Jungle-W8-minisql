@@ -1,9 +1,19 @@
 CC ?= cc
 CFLAGS ?= -std=c11 -Wall -Wextra -Werror -pedantic -Iinclude
 POWERSHELL ?= powershell.exe
-UNAME_S := $(shell uname -s 2>/dev/null)
 
+ifeq ($(OS),Windows_NT)
+HOST_OS := Windows
+else
+UNAME_S := $(shell uname -s 2>/dev/null)
 ifeq ($(UNAME_S),Linux)
+HOST_OS := Linux
+else
+HOST_OS := Unknown
+endif
+endif
+
+ifeq ($(HOST_OS),Linux)
 ASSERT_CLI = bash tests/integration/assert_cli_output.sh
 else
 ASSERT_CLI = $(POWERSHELL) -NoProfile -File tests/integration/assert_cli_output.ps1
@@ -21,6 +31,7 @@ WHERE_NAME_SQL := tests/integration/where_name.sql
 WHERE_NAME_EXPECTED := tests/integration/where_name.expected
 BENCH_EXPECTED := tests/integration/benchmark_smoke.expected
 INVALID_SQL := tests/integration/empty.sql
+TEST_DB_ROOT := ./tests/fixtures/data
 SRCS := \
 	src/runtime/main.c \
 	src/runtime/cli.c \
@@ -55,9 +66,9 @@ unit: $(UNIT_CLI_TARGET) $(UNIT_BPTREE_TARGET) $(UNIT_SERVER_CONFIG_TARGET)
 	@./$(UNIT_SERVER_CONFIG_TARGET)
 
 integration: $(TARGET)
-	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(SMOKE_SQL) -ExpectedFile $(SMOKE_EXPECTED)
-	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(WHERE_SQL) -ExpectedFile $(WHERE_EXPECTED)
-	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(WHERE_NAME_SQL) -ExpectedFile $(WHERE_NAME_EXPECTED)
+	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(SMOKE_SQL) -ExpectedFile $(SMOKE_EXPECTED) -DbRoot $(TEST_DB_ROOT)
+	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(WHERE_SQL) -ExpectedFile $(WHERE_EXPECTED) -DbRoot $(TEST_DB_ROOT)
+	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(WHERE_NAME_SQL) -ExpectedFile $(WHERE_NAME_EXPECTED) -DbRoot $(TEST_DB_ROOT)
 	@bash tests/integration/assert_insert_roundtrip.sh
 	@bash tests/integration/assert_csv_quoted_roundtrip.sh
 	@bash tests/integration/assert_multi_statement_roundtrip.sh
@@ -66,13 +77,13 @@ integration: $(TARGET)
 	@bash tests/integration/assert_invalid_persisted_row_rejected.sh
 
 integration-invalid: $(TARGET)
-	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(INVALID_SQL) -ExpectFailure -ExpectedPattern error:
+	@$(ASSERT_CLI) -Executable ./$(TARGET) -SqlFile $(INVALID_SQL) -ExpectFailure -ExpectedPattern error: -DbRoot $(TEST_DB_ROOT)
 
 benchmark-smoke: $(TARGET)
-ifeq ($(UNAME_S),Linux)
+ifeq ($(HOST_OS),Linux)
 	@bash tests/integration/assert_benchmark_output.sh
 else
-	@$(POWERSHELL) -NoProfile -File tests/integration/assert_benchmark_output.ps1 -Executable ./$(TARGET) -DbRoot ./data
+	@$(POWERSHELL) -NoProfile -File tests/integration/assert_benchmark_output.ps1 -Executable ./$(TARGET) -DbRoot $(TEST_DB_ROOT)
 endif
 
 verify-hooks:
@@ -85,7 +96,7 @@ test: unit integration integration-invalid benchmark-smoke verify-hooks
 ci: test
 
 clean:
-ifeq ($(UNAME_S),Linux)
+ifeq ($(HOST_OS),Linux)
 	-@rm -f $(TARGET) $(UNIT_CLI_TARGET) $(UNIT_BPTREE_TARGET) $(UNIT_SERVER_CONFIG_TARGET)
 else
 	-@$(POWERSHELL) -NoProfile -Command "Remove-Item -Force -ErrorAction SilentlyContinue '$(TARGET)', '$(UNIT_CLI_TARGET)', '$(UNIT_BPTREE_TARGET)', '$(UNIT_SERVER_CONFIG_TARGET)'"

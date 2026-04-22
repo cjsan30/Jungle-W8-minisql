@@ -5,7 +5,7 @@ param(
     [string]$ExpectedFile = "",
     [switch]$ExpectFailure,
     [string]$ExpectedPattern = "",
-    [string]$DbRoot = "./data",
+    [string]$DbRoot = "./tests/fixtures/data",
     [int]$BenchCount = 0
 )
 
