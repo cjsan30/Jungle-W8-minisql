@@ -393,6 +393,10 @@ for (index = 0; index < pool->worker_count; index++) {
 }
 ```
 
+### 7-6. 스레드 처리 흐름
+
+![스레드 처리 흐름](image/thread_flow_diagram.svg)
+
 ---
 
 ## 8. 발표 시연 순서
