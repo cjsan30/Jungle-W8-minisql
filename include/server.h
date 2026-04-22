@@ -39,8 +39,8 @@ DbServer *server_create(const ServerConfig *config, SqlError *error);
  *
  * 흐름:
  * - listen 소켓을 준비한다.
- * - 스레드풀을 시작한다.
- * - accept 루프에서 요청을 받아 worker에게 넘긴다.
+ * - `.ready` 전 단계에서는 accept 루프와 연결 수명주기 골격만 동작한다.
+ * - 스레드풀 준비가 끝나면 요청을 worker에게 넘기는 연결이 추가된다.
  */
 int server_start(DbServer *server, SqlError *error);
 
