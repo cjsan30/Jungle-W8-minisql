@@ -2,6 +2,7 @@
 #define SERVER_H
 
 #include "common.h"
+#include "request_handler.h"
 #include "server_config.h"
 #include "thread_pool.h"
 
@@ -10,6 +11,9 @@ typedef struct {
     int is_running;
     ServerConfig config;
     ThreadPool *thread_pool;
+    SqlService *sql_service;
+    DbGuard *db_guard;
+    RequestHandler *request_handler;
 } DbServer;
 
 /*
@@ -39,8 +43,8 @@ DbServer *server_create(const ServerConfig *config, SqlError *error);
  *
  * 흐름:
  * - listen 소켓을 준비한다.
- * - `.ready` 전 단계에서는 accept 루프와 연결 수명주기 골격만 동작한다.
- * - 스레드풀 준비가 끝나면 요청을 worker에게 넘기는 연결이 추가된다.
+ * - accept 루프에서 클라이언트 요청을 받는다.
+ * - 요청을 worker queue로 넘겨 병렬 처리한다.
  */
 int server_start(DbServer *server, SqlError *error);
 

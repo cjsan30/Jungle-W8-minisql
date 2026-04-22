@@ -68,7 +68,7 @@ void db_guard_destroy(DbGuard *guard);
 /*
  * 기능:
  * - read lock을 잡은 상태에서 작업 함수를 실행한다.
- * - 4번이 3번에게 전달하는 공용 호출 경계 stub다.
+ * - request handler가 읽기 SQL 실행을 감쌀 때 사용하는 공용 호출 경계다.
  *
  * 반환값:
  * - 성공: work_fn의 반환값
@@ -84,7 +84,7 @@ int db_guard_execute_read(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx,
 /*
  * 기능:
  * - write lock을 잡은 상태에서 작업 함수를 실행한다.
- * - 4번이 3번에게 전달하는 공용 호출 경계 stub다.
+ * - request handler가 쓰기 SQL 실행을 감쌀 때 사용하는 공용 호출 경계다.
  *
  * 반환값:
  * - 성공: work_fn의 반환값

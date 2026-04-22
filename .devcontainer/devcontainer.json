@@ -2,6 +2,15 @@
     "name": "C Development Container",
     "dockerFile": "Dockerfile",
     "remoteUser": "jungle",
+    "forwardPorts": [
+        8080
+    ],
+    "portsAttributes": {
+        "8080": {
+            "label": "MiniSQL API Server",
+            "onAutoForward": "notify"
+        }
+    },
     "customizations": {
         "vscode": {
             "extensions": [

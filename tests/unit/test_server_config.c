@@ -10,7 +10,8 @@ static void test_server_config_sets_safe_defaults(void) {
     memset(&config, 0x7f, sizeof(config));
     server_config_set_defaults(&config);
 
-    assert(strcmp(config.host, "127.0.0.1") == 0);
+    assert(strcmp(config.host, "0.0.0.0") == 0);
+    assert(strcmp(config.db_root, "./data") == 0);
     assert(config.port == 8080);
     assert(config.backlog == 128);
     assert(config.worker_count == 4);

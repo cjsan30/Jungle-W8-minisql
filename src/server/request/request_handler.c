@@ -1,6 +1,12 @@
 #include "request_handler.h"
 #include <ctype.h>
 
+typedef struct {
+    SqlService *sql_service;
+    const char *sql_text;
+    SqlServiceResult result;
+} RequestExecutionContext;
+
 static int is_blank_text(const char *text, size_t length) {
     size_t index;
 
@@ -16,12 +22,12 @@ static int is_blank_text(const char *text, size_t length) {
     return 1;
 }
 
-static int set_text_response(HttpResponse *response, int status_code, const char *body, SqlError *error) {
+static int set_json_response(HttpResponse *response, int status_code, const char *body, SqlError *error) {
     HttpResponse built = {0};
     const char *payload = body != NULL ? body : "";
 
     built.status_code = status_code;
-    built.content_type = "text/plain; charset=utf-8";
+    built.content_type = "application/json; charset=utf-8";
     built.body = sql_strdup(payload);
     if (built.body == NULL) {
         sql_set_error(error, 0, 0, "failed to allocate HTTP response body");
@@ -33,26 +39,63 @@ static int set_text_response(HttpResponse *response, int status_code, const char
     return 1;
 }
 
-/*
- * 기능:
- * - 요청 처리기 객체를 생성한다.
- *
- * 반환값:
- * - 성공: `RequestHandler *`
- * - 실패: `NULL`, error에 원인 기록
- *
- * 흐름:
- * - sql_service와 db_guard 의존성을 연결한다.
- * - 요청 처리에 필요한 상태를 초기화한다.
- *
- * 현재 상태:
- * - 의존성 연결과 최소 유효성 검사까지 담당한다.
- */
+static char *build_error_payload(const char *message, SqlError *error) {
+    const char *text = message != NULL ? message : "unknown request error";
+    char *quoted = sql_json_quote(text, error);
+    char *payload;
+    size_t capacity;
+
+    if (quoted == NULL) {
+        return NULL;
+    }
+
+    capacity = strlen(quoted) + strlen("{\"ok\":false,\"error\":{\"message\":}}") + 1U;
+    payload = (char *) malloc(capacity);
+    if (payload == NULL) {
+        free(quoted);
+        sql_set_error(error, 0, 0, "failed to allocate JSON error payload");
+        return NULL;
+    }
+
+    (void) snprintf(payload, capacity, "{\"ok\":false,\"error\":{\"message\":%s}}", quoted);
+    free(quoted);
+    return payload;
+}
+
+static int set_json_error_response(HttpResponse *response, int status_code, const char *message, SqlError *error) {
+    char *payload = build_error_payload(message, error);
+    int ok;
+
+    if (payload == NULL) {
+        return 0;
+    }
+
+    ok = set_json_response(response, status_code, payload, error);
+    free(payload);
+    return ok;
+}
+
+static int execute_sql_work(void *work_ctx, SqlError *error) {
+    RequestExecutionContext *context = work_ctx;
+
+    if (context == NULL) {
+        sql_set_error(error, 0, 0, "request execution context must not be null");
+        return 0;
+    }
+
+    context->result = sql_service_execute(context->sql_service, context->sql_text, error);
+    return context->result.payload != NULL;
+}
+
 RequestHandler *request_handler_create(SqlService *sql_service, DbGuard *db_guard, SqlError *error) {
     RequestHandler *handler;
 
     if (sql_service == NULL) {
         sql_set_error(error, 0, 0, "request_handler_create requires a SQL service");
+        return NULL;
+    }
+    if (db_guard == NULL) {
+        sql_set_error(error, 0, 0, "request_handler_create requires a DB guard");
         return NULL;
     }
 
@@ -67,29 +110,16 @@ RequestHandler *request_handler_create(SqlService *sql_service, DbGuard *db_guar
     return handler;
 }
 
-/*
- * 기능:
- * - HTTP 요청 1건을 처리해 응답 객체를 만든다.
- *
- * 반환값:
- * - 성공: 1
- * - 실패: 0, error에 원인 기록
- *
- * 흐름:
- * - 요청 유효성을 검사한다.
- * - SQL 실행 계층으로 전달한다.
- * - 실행 결과를 HTTP 응답으로 변환한다.
- *
- * 현재 상태:
- * - 요청 검증과 표준 에러 응답 생성까지 구현한다.
- * - DB 실행 연결은 `src/server/concurrency/.ready` 이후에 붙인다.
- */
 int request_handler_handle(RequestHandler *handler,
                            const HttpRequest *request,
                            HttpResponse *response,
                            SqlError *error) {
     SqlOperationKind operation = SQL_OPERATION_UNKNOWN;
     SqlError classify_error = {0};
+    SqlError execution_error = {0};
+    RequestExecutionContext execution = {0};
+    int executed = 0;
+    int response_ok = 0;
 
     if (handler == NULL || request == NULL || response == NULL) {
         sql_set_error(error, 0, 0, "request_handler_handle received invalid arguments");
@@ -97,43 +127,56 @@ int request_handler_handle(RequestHandler *handler,
     }
 
     if (handler->sql_service == NULL) {
-        return set_text_response(response, 500, "SQL service is not configured.\n", error);
+        return set_json_error_response(response, 500, "SQL service is not configured.", error);
+    }
+    if (handler->db_guard == NULL) {
+        return set_json_error_response(response, 500, "DB guard is not configured.", error);
     }
 
     if (strcmp(request->method, "POST") != 0) {
-        return set_text_response(response, 405, "Only POST requests are supported.\n", error);
+        return set_json_error_response(response, 405, "Only POST requests are supported.", error);
     }
 
     if (request->path[0] != '/') {
-        return set_text_response(response, 400, "Request path must start with '/'.\n", error);
+        return set_json_error_response(response, 400, "Request path must start with '/'.", error);
     }
 
     if (request->body == NULL || request->body_length == 0U || is_blank_text(request->body, request->body_length)) {
-        return set_text_response(response, 400, "Request body must contain SQL text.\n", error);
+        return set_json_error_response(response, 400, "Request body must contain SQL text.", error);
     }
 
     if (!sql_service_classify_operation(request->body, &operation, &classify_error)) {
-        return set_text_response(response, 400, classify_error.message, error);
+        return set_json_error_response(response, 400, classify_error.message, error);
     }
 
-    (void) operation;
-    return set_text_response(response, 503, "DB execution bridge is not integrated yet.\n", error);
+    execution.sql_service = handler->sql_service;
+    execution.sql_text = request->body;
+
+    if (operation == SQL_OPERATION_READ) {
+        executed = db_guard_execute_read(handler->db_guard, execute_sql_work, &execution, &execution_error);
+    } else if (operation == SQL_OPERATION_WRITE) {
+        executed = db_guard_execute_write(handler->db_guard, execute_sql_work, &execution, &execution_error);
+    } else {
+        return set_json_error_response(response, 400, "Unsupported SQL operation.", error);
+    }
+
+    if (execution.result.payload != NULL) {
+        response_ok = set_json_response(response, execution.result.ok ? 200 : 400, execution.result.payload, error);
+        sql_service_result_destroy(&execution.result);
+        return response_ok;
+    }
+
+    if (!executed) {
+        return set_json_error_response(response,
+                                       500,
+                                       execution_error.message[0] != '\0' ? execution_error.message
+                                                                           : "Failed to execute SQL request.",
+                                       error);
+    }
+
+    return set_json_error_response(response, 500, "SQL request completed without a response payload.", error);
 }
 
-/*
- * 기능:
- * - 요청 처리기 객체를 해제한다.
- *
- * 반환값:
- * - 없음
- *
- * 흐름:
- * - 내부 상태가 있으면 정리한다.
- * - 마지막에 처리기 구조체를 해제한다.
- *
- * 현재 상태:
- * - 처리기 자신만 해제하고 외부 의존성 소유권은 건드리지 않는다.
- */
 void request_handler_destroy(RequestHandler *handler) {
     free(handler);
 }

@@ -7,6 +7,7 @@
 
 typedef struct {
     char host[SERVER_HOST_BUFFER_SIZE];
+    char db_root[SQL_PATH_BUFFER_SIZE];
     int port;
     int backlog;
     int worker_count;

@@ -7,6 +7,8 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
     python3 cmake make gcc sudo valgrind telnet net-tools iproute2 \
     && locale-gen ko_KR.UTF-8 && update-locale LANG=ko_KR.UTF-8
 
+RUN git config --system --add safe.directory /workspace
+
 RUN useradd -m -s /bin/bash jungle && usermod -aG sudo jungle
 RUN echo "jungle ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/jungle
 

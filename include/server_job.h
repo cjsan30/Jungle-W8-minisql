@@ -3,11 +3,13 @@
 
 #include "common.h"
 #include "job_queue.h"
+#include "request_handler.h"
 
 typedef struct {
     int client_fd;
     char *raw_request;
     size_t raw_request_length;
+    RequestHandler *request_handler;
 } ServerJobData;
 
 /*
@@ -37,7 +39,8 @@ typedef struct {
 void server_job_data_init(ServerJobData *job_data,
                           int client_fd,
                           char *raw_request,
-                          size_t raw_request_length);
+                          size_t raw_request_length,
+                          RequestHandler *request_handler);
 
 /*
  * 기능:

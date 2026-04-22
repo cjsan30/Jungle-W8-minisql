@@ -19,7 +19,8 @@
 void server_job_data_init(ServerJobData *job_data,
                           int client_fd,
                           char *raw_request,
-                          size_t raw_request_length) {
+                          size_t raw_request_length,
+                          RequestHandler *request_handler) {
     if (job_data == NULL) {
         return;
     }
@@ -27,6 +28,7 @@ void server_job_data_init(ServerJobData *job_data,
     job_data->client_fd = client_fd;
     job_data->raw_request = raw_request;
     job_data->raw_request_length = raw_request_length;
+    job_data->request_handler = request_handler;
 }
 
 /*
@@ -54,6 +56,10 @@ int server_job_data_validate(const ServerJobData *job_data, SqlError *error) {
     }
     if (job_data->raw_request == NULL || job_data->raw_request_length == 0U) {
         sql_set_error(error, 0, 0, "server_job_data raw_request must not be empty");
+        return 0;
+    }
+    if (job_data->request_handler == NULL) {
+        sql_set_error(error, 0, 0, "server_job_data request_handler must not be null");
         return 0;
     }
     return 1;
@@ -106,6 +112,7 @@ void server_job_data_destroy(ServerJobData *job_data) {
     free(job_data->raw_request);
     job_data->raw_request = NULL;
     job_data->raw_request_length = 0U;
+    job_data->request_handler = NULL;
     job_data->client_fd = -1;
 }
 

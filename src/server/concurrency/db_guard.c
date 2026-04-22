@@ -21,7 +21,7 @@ struct DbGuard {
  * - read/write lock 상태를 초기화한다.
  *
  * 현재 상태:
- * - 동시성 보호 계층 생성을 위한 stub 함수다.
+ * - 서버 요청 경로에서 사용할 동시성 보호 계층을 초기화한다.
  */
 DbGuard *db_guard_create(DbContext *ctx, SqlError *error) {
     DbGuard *guard;
@@ -57,7 +57,7 @@ DbGuard *db_guard_create(DbContext *ctx, SqlError *error) {
  * - 읽기 가능 상태면 lock을 획득한다.
  *
  * 현재 상태:
- * - read lock 획득을 위한 stub 함수다.
+ * - writer 우선 정책을 반영해 read lock을 획득한다.
  */
 int db_guard_lock_read(DbGuard *guard, SqlError *error) {
     if (guard == NULL) {
@@ -94,7 +94,7 @@ int db_guard_lock_read(DbGuard *guard, SqlError *error) {
  * - 단독 접근이 가능할 때 lock을 획득한다.
  *
  * 현재 상태:
- * - write lock 획득을 위한 stub 함수다.
+ * - reader가 비워질 때까지 기다린 뒤 write lock을 획득한다.
  */
 int db_guard_lock_write(DbGuard *guard, SqlError *error) {
     if (guard == NULL) {
@@ -134,10 +134,10 @@ int db_guard_lock_write(DbGuard *guard, SqlError *error) {
  *
  * 흐름:
  * - 읽기 카운트나 상태를 줄인다.
- * - 대기 중인 writer가 있으면 깨운다.
+ * - 다음 reader 또는 writer가 진입할 수 있도록 상태를 반영한다.
  *
  * 현재 상태:
- * - 해제 지점을 위한 stub 함수다.
+ * - read lock 해제만 담당한다.
  */
 void db_guard_unlock_read(DbGuard *guard) {
     if (guard == NULL) {
@@ -156,10 +156,10 @@ void db_guard_unlock_read(DbGuard *guard) {
  *
  * 흐름:
  * - 쓰기 상태를 종료한다.
- * - 대기 중인 reader/writer를 깨운다.
+ * - 다음 reader 또는 writer가 진입할 수 있도록 상태를 반영한다.
  *
  * 현재 상태:
- * - 해제 지점을 위한 stub 함수다.
+ * - write lock 해제만 담당한다.
  */
 void db_guard_unlock_write(DbGuard *guard) {
     if (guard == NULL) {
@@ -177,11 +177,11 @@ void db_guard_unlock_write(DbGuard *guard) {
  * - 없음
  *
  * 흐름:
- * - 내부 lock 자원을 정리한다.
+ * - 내부 상태를 사용 종료 상태로 정리한다.
  * - 마지막에 guard 구조체를 해제한다.
  *
  * 현재 상태:
- * - 해제 지점을 위한 stub 함수다.
+ * - guard 구조체 메모리를 해제한다.
  */
 void db_guard_destroy(DbGuard *guard) {
     if (guard == NULL) {
@@ -205,7 +205,7 @@ void db_guard_destroy(DbGuard *guard) {
  * - read lock을 해제한다.
  *
  * 현재 상태:
- * - 협업용 공용 stub 함수다.
+ * - request handler의 읽기 SQL 실행 경계로 사용된다.
  */
 int db_guard_execute_read(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx, SqlError *error) {
     int ok;
@@ -238,7 +238,7 @@ int db_guard_execute_read(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx,
  * - write lock을 해제한다.
  *
  * 현재 상태:
- * - 협업용 공용 stub 함수다.
+ * - request handler의 쓰기 SQL 실행 경계로 사용된다.
  */
 int db_guard_execute_write(DbGuard *guard, DbGuardWorkFn work_fn, void *work_ctx, SqlError *error) {
     int ok;

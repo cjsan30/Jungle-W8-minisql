@@ -12,6 +12,14 @@ static int server_config_validate(const ServerConfig *config, SqlError *error) {
         sql_set_error(error, 0, 0, "server host must be null terminated");
         return 0;
     }
+    if (memchr(config->db_root, '\0', sizeof(config->db_root)) == NULL) {
+        sql_set_error(error, 0, 0, "server db_root must be null terminated");
+        return 0;
+    }
+    if (config->db_root[0] == '\0') {
+        sql_set_error(error, 0, 0, "server db_root must not be empty");
+        return 0;
+    }
     if (config->port <= 0 || config->port > 65535) {
         sql_set_error(error, 0, 0, "server port must be between 1 and 65535");
         return 0;
@@ -45,7 +53,7 @@ static int server_config_validate(const ServerConfig *config, SqlError *error) {
  *
  * 흐름:
  * - 설정값을 검증한다.
- * - 서버 구조체와 내부 의존성을 준비한다.
+ * - 서버 구조체, thread pool, SQL 실행 의존성을 준비한다.
  * - 이후 `server_start`에서 실제 실행을 시작한다.
  *
  */
@@ -70,6 +78,31 @@ DbServer *server_create(const ServerConfig *config, SqlError *error) {
         free(server);
         return NULL;
     }
+
+    server->sql_service = sql_service_create(config->db_root, error);
+    if (server->sql_service == NULL) {
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
+    server->db_guard = db_guard_create(server->sql_service->db_context, error);
+    if (server->db_guard == NULL) {
+        sql_service_destroy(server->sql_service);
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
+    server->request_handler = request_handler_create(server->sql_service, server->db_guard, error);
+    if (server->request_handler == NULL) {
+        db_guard_destroy(server->db_guard);
+        sql_service_destroy(server->sql_service);
+        thread_pool_destroy(server->thread_pool);
+        free(server);
+        return NULL;
+    }
+
     return server;
 }
 
@@ -83,8 +116,8 @@ DbServer *server_create(const ServerConfig *config, SqlError *error) {
  *
  * 흐름:
  * - listen 소켓을 준비한다.
- * - `.ready` 전 단계에서는 accept 루프와 연결 수명주기 골격만 동작한다.
- * - 스레드풀 준비가 끝나면 요청을 작업 큐에 전달하는 연결이 추가된다.
+ * - accept 루프에서 요청을 받고 worker queue에 전달한다.
+ * - worker가 request handler를 통해 SQL 요청을 처리한다.
  *
  */
 int server_start(DbServer *server, SqlError *error) {
@@ -166,6 +199,9 @@ void server_destroy(DbServer *server) {
     }
 
     server_stop(server);
+    request_handler_destroy(server->request_handler);
+    db_guard_destroy(server->db_guard);
+    sql_service_destroy(server->sql_service);
     thread_pool_destroy(server->thread_pool);
     free(server);
 }

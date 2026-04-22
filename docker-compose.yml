@@ -9,5 +9,7 @@ services:
     stdin_open: true
     init: true
     user: jungle
+    ports:
+      - "8080:8080"
     volumes:
       - .:/workspace
