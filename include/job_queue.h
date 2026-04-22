@@ -34,8 +34,11 @@ JobQueue *job_queue_create(int capacity, SqlError *error);
  *
  * 흐름:
  * - 큐 종료 여부를 확인한다.
- * - 공간이 없으면 정책에 따라 대기 또는 실패시킨다.
+ * - 공간이 없으면 pop 또는 close가 발생할 때까지 대기한다.
  * - 작업을 push한다.
+ *
+ * 계약:
+ * - push 실패 시 Job.data cleanup은 호출자가 책임진다.
  */
 int job_queue_push(JobQueue *queue, Job job, SqlError *error);
 
@@ -45,7 +48,10 @@ int job_queue_push(JobQueue *queue, Job job, SqlError *error);
  *
  * 반환값:
  * - 성공: 1
- * - 실패 또는 종료: 0
+ * - 닫힌 큐가 비었거나 입력 오류: 0
+ *
+ * 계약:
+ * - close 이후에도 이미 들어간 작업은 모두 pop된다.
  */
 int job_queue_pop(JobQueue *queue, Job *out_job);
 

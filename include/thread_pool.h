@@ -33,12 +33,17 @@ int thread_pool_start(ThreadPool *pool, SqlError *error);
  * 반환값:
  * - 성공: 1
  * - 실패: 0, error에 실패 원인 기록
+ *
+ * 계약:
+ * - 성공한 작업의 Job.data는 worker가 execute 이후 cleanup으로 해제한다.
+ * - submit 실패 시 thread_pool_submit이 cleanup을 호출한다.
  */
 int thread_pool_submit(ThreadPool *pool, Job job, SqlError *error);
 
 /*
  * 기능:
  * - 스레드풀을 종료한다.
+ * - 새 작업 수신을 막고, 이미 큐에 들어간 작업은 처리한 뒤 worker를 join한다.
  *
  * 반환값:
  * - 없음
