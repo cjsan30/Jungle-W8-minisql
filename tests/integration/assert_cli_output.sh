@@ -5,7 +5,7 @@ executable=""
 sql_file=""
 expected_file=""
 expected_pattern=""
-db_root="./data"
+db_root="./tests/fixtures/data"
 bench_count=0
 expect_failure=0
 

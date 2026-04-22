@@ -2,7 +2,8 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "$0")/../.." && pwd)"
-output="$("$root_dir/sql_processor" --bench 10 --db "$root_dir/data" 2>&1)"
+db_root="${SQL_TEST_DB_ROOT:-$root_dir/tests/fixtures/data}"
+output="$("$root_dir/sql_processor" --bench 10 --db "$db_root" 2>&1)"
 
 if ! printf '%s\n' "$output" | grep -Eq '^benchmark rows=2 iterations=10$'; then
     printf 'Missing benchmark summary:\n%s\n' "$output" >&2

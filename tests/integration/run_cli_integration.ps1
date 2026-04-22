@@ -1,7 +1,7 @@
 param(
     [Parameter(Mandatory = $true)]
     [string]$Executable,
-    [string]$DbRoot = "./data"
+    [string]$DbRoot = "./tests/fixtures/data"
 )
 
 $ErrorActionPreference = "Stop"

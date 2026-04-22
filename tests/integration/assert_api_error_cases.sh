@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER_BIN="${ROOT_DIR}/sql_api_server"
+FIXTURE_DB_ROOT="${SQL_TEST_DB_ROOT:-${ROOT_DIR}/tests/fixtures/data}"
 PORT=18082
 BIND_HOST=0.0.0.0
 REQUEST_HOST=127.0.0.1
@@ -42,7 +43,7 @@ PY
 
 trap cleanup EXIT
 
-"${SERVER_BIN}" --host "${BIND_HOST}" --port "${PORT}" --db "${ROOT_DIR}/data" >"${LOG_FILE}" 2>&1 &
+"${SERVER_BIN}" --host "${BIND_HOST}" --port "${PORT}" --db "${FIXTURE_DB_ROOT}" >"${LOG_FILE}" 2>&1 &
 SERVER_PID=$!
 
 for _ in $(seq 1 20); do

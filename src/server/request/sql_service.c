@@ -477,6 +477,22 @@ static char *build_insert_payload(const Query *query, const char *message, SqlEr
     return payload;
 }
 
+/*
+ * 기능:
+ * - SQL 서비스 인스턴스를 생성하고 DB 컨텍스트를 준비한다.
+ *
+ * 반환값:
+ * - 성공: 초기화된 `SqlService *`
+ * - 실패: `NULL`, error에 원인 기록
+ *
+ * 흐름:
+ * - `db_root` 경로를 검증한다.
+ * - 서비스 객체를 할당하고 경로를 보관한다.
+ * - `db_context_create()`로 실제 DB 엔진 접근 컨텍스트를 생성한다.
+ *
+ * 현재 상태:
+ * - 요청 계층에서 바로 사용할 수 있는 실행 준비 상태로 생성된다.
+ */
 SqlService *sql_service_create(const char *db_root, SqlError *error) {
     SqlService *service;
     size_t root_length;
@@ -508,6 +524,22 @@ SqlService *sql_service_create(const char *db_root, SqlError *error) {
     return service;
 }
 
+/*
+ * 기능:
+ * - SQL 문자열을 read/write 작업으로 분류한다.
+ *
+ * 반환값:
+ * - 성공: 1, `operation`에 분류 결과 기록
+ * - 실패: 0, error에 원인 기록
+ *
+ * 흐름:
+ * - 앞쪽 공백, 주석, 세미콜론을 건너뛴다.
+ * - 첫 키워드가 `SELECT`인지 `INSERT`인지 확인한다.
+ * - 지원하지 않는 SQL은 `SQL_OPERATION_UNKNOWN`으로 처리한다.
+ *
+ * 현재 상태:
+ * - API 서버에서는 `SELECT`, `INSERT`만 지원한다.
+ */
 int sql_service_classify_operation(const char *sql_text, SqlOperationKind *operation, SqlError *error) {
     const char *cursor;
 
@@ -538,6 +570,23 @@ int sql_service_classify_operation(const char *sql_text, SqlOperationKind *opera
     return 0;
 }
 
+/*
+ * 기능:
+ * - SQL 문자열을 기존 parser/executor 엔진으로 실행하고 JSON 결과를 만든다.
+ *
+ * 반환값:
+ * - 성공/실패 여부와 payload를 담은 `SqlServiceResult`
+ *
+ * 흐름:
+ * - SQL을 파싱해 `Query`로 변환한다.
+ * - `SELECT`는 현재 DB 상태를 읽어 JSON rows payload를 만든다.
+ * - `INSERT`는 executor를 호출한 뒤 실행 메시지를 JSON payload로 감싼다.
+ * - 실패 시에도 JSON 에러 payload를 만들어 상위 계층이 그대로 응답하게 한다.
+ *
+ * 현재 상태:
+ * - 요청 처리 계층에서 바로 호출되며,
+ *   응답 형식은 Postman/외부 클라이언트용 JSON으로 통일돼 있다.
+ */
 SqlServiceResult sql_service_execute(SqlService *service, const char *sql_text, SqlError *error) {
     SqlServiceResult result = {0};
     Query query = {0};
@@ -614,6 +663,17 @@ SqlServiceResult sql_service_execute(SqlService *service, const char *sql_text, 
     return result;
 }
 
+/*
+ * 기능:
+ * - SQL 서비스 실행 결과 payload를 해제한다.
+ *
+ * 반환값:
+ * - 없음
+ *
+ * 흐름:
+ * - JSON payload 메모리를 해제한다.
+ * - 결과 상태를 초기화한다.
+ */
 void sql_service_result_destroy(SqlServiceResult *result) {
     if (result == NULL) {
         return;
@@ -624,6 +684,17 @@ void sql_service_result_destroy(SqlServiceResult *result) {
     result->ok = 0;
 }
 
+/*
+ * 기능:
+ * - SQL 서비스와 내부 DB 컨텍스트를 해제한다.
+ *
+ * 반환값:
+ * - 없음
+ *
+ * 흐름:
+ * - `db_context_destroy()`로 DB 엔진 컨텍스트를 먼저 정리한다.
+ * - 서비스 객체를 해제한다.
+ */
 void sql_service_destroy(SqlService *service) {
     if (service == NULL) {
         return;

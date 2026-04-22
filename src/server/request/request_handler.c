@@ -87,6 +87,22 @@ static int execute_sql_work(void *work_ctx, SqlError *error) {
     return context->result.payload != NULL;
 }
 
+/*
+ * 기능:
+ * - 요청 처리기 인스턴스를 생성한다.
+ *
+ * 반환값:
+ * - 성공: 초기화된 `RequestHandler *`
+ * - 실패: `NULL`, error에 원인 기록
+ *
+ * 흐름:
+ * - `SqlService`와 `DbGuard`가 준비됐는지 확인한다.
+ * - 요청 처리기에 필요한 의존성을 묶어 저장한다.
+ *
+ * 현재 상태:
+ * - 요청 검증은 `request_handler_handle()`에서 수행하고,
+ *   여기서는 실행에 필요한 서비스 경계만 준비한다.
+ */
 RequestHandler *request_handler_create(SqlService *sql_service, DbGuard *db_guard, SqlError *error) {
     RequestHandler *handler;
 
@@ -110,6 +126,24 @@ RequestHandler *request_handler_create(SqlService *sql_service, DbGuard *db_guar
     return handler;
 }
 
+/*
+ * 기능:
+ * - 파싱된 HTTP 요청을 검증하고 실제 SQL 실행까지 연결한다.
+ *
+ * 반환값:
+ * - 성공: 1, `response`에 JSON HTTP 응답 기록
+ * - 실패: 0, error에 원인 기록
+ *
+ * 흐름:
+ * - method/path/body를 검증한다.
+ * - SQL을 read/write로 분류한다.
+ * - `DbGuard`를 통해 read/write 실행 경계를 적용한다.
+ * - 실행 결과 또는 실패 사유를 JSON 응답으로 변환한다.
+ *
+ * 현재 상태:
+ * - `POST + body` 요청만 허용한다.
+ * - 요청은 text/plain SQL을 받고, 응답은 JSON으로 반환한다.
+ */
 int request_handler_handle(RequestHandler *handler,
                            const HttpRequest *request,
                            HttpResponse *response,
@@ -177,6 +211,17 @@ int request_handler_handle(RequestHandler *handler,
     return set_json_error_response(response, 500, "SQL request completed without a response payload.", error);
 }
 
+/*
+ * 기능:
+ * - 요청 처리기 인스턴스를 해제한다.
+ *
+ * 반환값:
+ * - 없음
+ *
+ * 흐름:
+ * - 처리기 자신만 해제한다.
+ * - `SqlService`와 `DbGuard` 수명은 호출 측이 관리한다.
+ */
 void request_handler_destroy(RequestHandler *handler) {
     free(handler);
 }

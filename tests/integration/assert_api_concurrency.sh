@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SERVER_BIN="${ROOT_DIR}/sql_api_server"
+FIXTURE_DB_ROOT="${SQL_TEST_DB_ROOT:-${ROOT_DIR}/tests/fixtures/data}"
 PORT=18081
 BIND_HOST=0.0.0.0
 REQUEST_HOST=127.0.0.1
@@ -16,8 +17,8 @@ select_job_pids=()
 mixed_job_pids=()
 
 mkdir -p "${TMP_DIR}" "${DB_ROOT}/schema" "${DB_ROOT}/tables"
-cp "${ROOT_DIR}/data/schema/users.schema" "${DB_ROOT}/schema/users.schema"
-cp "${ROOT_DIR}/data/tables/users.csv" "${DB_ROOT}/tables/users.csv"
+cp "${FIXTURE_DB_ROOT}/schema/users.schema" "${DB_ROOT}/schema/users.schema"
+cp "${FIXTURE_DB_ROOT}/tables/users.csv" "${DB_ROOT}/tables/users.csv"
 
 cleanup() {
   if [[ -n "${SERVER_PID:-}" ]] && kill -0 "${SERVER_PID}" 2>/dev/null; then

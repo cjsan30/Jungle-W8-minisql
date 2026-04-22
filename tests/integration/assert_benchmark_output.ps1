@@ -1,6 +1,6 @@
 param(
     [string]$Executable = "./sql_processor",
-    [string]$DbRoot = "./data"
+    [string]$DbRoot = "./tests/fixtures/data"
 )
 
 $ErrorActionPreference = "Stop"
